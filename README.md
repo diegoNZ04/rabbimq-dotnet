@@ -291,3 +291,225 @@ Resultado dos terminais:
 
 ![result-round-dispatching](https://github.com/user-attachments/assets/7352b5af-ae3a-472a-b9bf-80cf5c352280)
 
+### Reconhecimento de Mensagem
+
+A execução de uma tarefa pode levar alguns segundos.
+Você pode se perguntar o que acontece se um dos consumidores inicia uma tarefa longa e morre com ela apenas parcialmente concluída.
+
+Com nosso código atual, assim que o RabbitMQ entrega uma mensagem ao consumidor, ele a marca imediatamente para exclusão. Neste caso, se você encerrar um trabalhador, perderemos a mensagem que ele estavam processando. 
+
+Também perdemos todas as mensagens que foram enviadas para esse trabalhador específico, mas que ainda não foram tratadas. 
+Mas não queremos perder nenhuma tarefa. Se um trabalhador morrer, gostaríamos que a tarefa fosse entregue a outro trabalhador.
+
+Para garantir que uma mensagem nunca seja perdida, o RabbitMQ oferece suporte a confirmações de mensagens. Uma confirmação (reconhecimento) é enviada de volta pelo consumidor par informar ao RabbitMQ que uma mensagem específica foi recebida, processada e que o RabbitMQ está livre para excluí-la.
+
+Se um consumidor morrer (seu canal for fechado, a conexão for fechada ou a conexão TCP for perdida) sem enviar uma confirmação, o RabbitMQ entenderá que uma mensagem não foi totalmente processada e a colocará novamente na fila. Se houver outros consumidores online ao mesmo tempo, ele irá entregá-lo rapidamente a outro consumidor. 
+
+Dessa forma, você pode ter certeza de que nenhuma mensagem será perdida, mesmo que os trabalhadores morram.
+
+Um tempo limite (30 minutos por padrão) é aplicado na confirmação de entrega do consumidor.  Isso ajuda a detectar consumidores com erros (travados) que nuca reconhecem as entregas. 
+
+As confirmações manuais de mensagens estão ativadas por padrão. Nos exemplos anteriores, nós desativamos explicitamente definindo o parâmetro `autoAck` (modo de reconhecimento automático). É hora de remover esse sinalizador e enviar manualmente uma confirmação adequada do trabalhador, assim que terminarmos uma tarefa.
+
+Depois `WriteLine` existente, adicione a chamada para `BasicAck` e atualize o `BasicConsume` com `autoAck: false`:
+
+```
+// Aqui o cannal pode ser acessado como ((AsyncEventingBasicConsumer)sender).Channel
+
+    await channel.BasicAckAsync
+    (
+        deliveryTag: ea.DeliveryTag,
+        multiple: false
+    );
+};
+```
+
+Usando esse código, você pode garantir que, mesmo se encerrar um nó de trabalho usando `CTRL+C` enquanto ele processa uma mensagem, nada será perdido.
+Logo após o encerramento do nó de trabalho, todas as mensagens não confirmadas serão entregues novamente.
+
+A confirmação deve ser enviada no mesmo canal que recebeu a entrega. As tentativas de confirmação usando um canal diferente resultarão em um exceção de protocolo no nível do canal.
+#### Reconhecimento Esquecido
+É um erro comum perder o *BasicAck*. É um erro fácil, mas as consequências são graves. As mensagens serão reenviadas quando seu cliente sair (o que pode parar um reenvio aleatório), mas o RabbitMQ consumirá cada vez mais memória, pois não será capaz de liberar nenhuma mensagem não confirmada.
+Para depurar esse tipo de erro você pode usar:
+
+```
+rabbitmqctl.bat list_queues name messages_ready messages_unacknowledged
+```
+### Durabilidade da Mensagem
+
+Aprendemos como garantir que, mesmo que o consumidor morra, a tarefa não seja perdida. Mas nossas tarefas ainda serão perdidas se o servidor RabbitMQ parar.
+
+Quando o RabbitMQ for encerrado ou travado, ele esquecerá as filas e mensagens, a menos que você diga para não fazer isso. Duas coisas são necessárias para garantir que as mensagens não sem perdidas: precisamos marca a fila e as mensagens como duráveis.
+
+Primeiro, precisamos ter certeza de que a fila sobreviverá à reinicialização do nó RabbitMQ. Para fazer isso, precisamos declará-lo como durável:
+
+```
+await channel.QueueDeclareAsync
+(
+	queue: "hello",
+    durable: true, 
+    exclusive: false,
+    autoDelete: false, arguments: null
+);
+```
+
+Embora este comando esteja correto por si só, ele não funcionará em nossa configuração. Isso porque já definimos uma fila chamada `hello` que não é durável. RabbitMQ não permite redefinir uma fila existente com parâmetros diferentes e retornará um erro para qualquer programa que tentar fazer isso.
+Mas há uma solução rápida - vamos declarar uma fila com um nome diferente, por exemplo, `task_queue`:
+
+```
+// NewTask
+
+await channel.QueueDeclareAsync
+(
+    queue: "task_queue",
+    durable: true,
+    exclusive: false,
+    autoDelete: false,
+    arguments: null
+);
+```
+
+A declaração `QueueDeclareAsync` precisa ser aplicada ao código do *publisher* e *consumer*. Você também precisa alterar o nome da fila para `BasicConsumeAsync` e `BasicPublishAsync`.
+
+Neste ponto, temos certeza de que a fila `task_queue` não será perdida mesmo se o RabbiMQ for reiniciado. Agora precisamos marcar nossas mensagens como persistentes.
+
+Após `GetBytes`, define `IBasicProperties.Persistent` como true:
+
+```
+var properties = new BasicProperties
+{
+    Persistent = true
+};
+```
+### Despacho Justo
+
+Você deve ter notado que o despacho ainda não exatamente como desejamos. Por exemplo, numa situação com dois trabalhadores, quando todas as mensagens ímpares são pesadas e as mensagens pares são leves, um trabalhador estará constantemente ocupado e o outro dificilmente realizará qualquer trabalho. 
+Bem, o RabbiMQ não sabe nada sobre isso e ainda enviará mensagens uniformemente.
+
+Isso acontece porque o RabbitMQ apenas despacha uma mensagem quando ela entra na fila. Ele não analisa o número de mensagens não confirmadas de um consumidor. Ele apenas despacha cegamente cada enésima mensagem para o enésimo consumidor.
+
+![fair-dispatching](https://github.com/user-attachments/assets/e327ed27-750f-4d8c-bfa1-1705420e67a6)
+
+Para alterar esse comportamento, podemos usar o método `BasicQos` com a configuração `prefechCount` - `1`. Isso diz ao RabbitMQ para não fornecer mais de uma mensagem a um trabalhador por vez. Ou, em outras palavras, não envie uma nova mensagem para um trabalhador até que ele tenha processado e confirmado a anterior. 
+Em vez disso, ele irá despachá-lo para o próximo trabalhador que ainda não esteja ocupado.
+
+Depois do `QueueDeclareAsync` existente em *Worker*, adicione a chamada do `BasicQos`:
+
+```
+await channel.BasicQosAsync
+(
+    prefetchSize: 0,
+    prefetchCount: 1,
+    global: false
+);
+```
+### Juntando Tudo
+
+Abra dois terminais.
+
+Execute primeiro o *consumer (worker)* para a topologia (principalmente a fila) esteja em vigor. Aqui está o código completo:
+
+```
+// Worker
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text;
+
+var factory = new ConnectionFactory { HostName = "localhost" };
+using var connection = await factory.CreateConnectionAsync();
+using var channel = await connection.CreateChannelAsync();
+
+await channel.QueueDeclareAsync
+(
+    queue: "task_queue",
+    durable: true,
+    exclusive: false,
+    autoDelete: false,
+    arguments: null
+);
+
+await channel.BasicQosAsync
+(
+    prefetchSize: 0,
+    prefetchCount: 1,
+    global: false
+);
+
+Console.WriteLine(" [*] Waiting for messages.");
+
+var consumer = new AsyncEventingBasicConsumer(channel);
+consumer.ReceivedAsync += async (model, ea) =>
+{
+    byte[] body = ea.Body.ToArray();
+    var message = Encoding.UTF8.GetString(body);
+    Console.WriteLine($" [x] Received {message}");
+
+    int dots = message.Split('.').Length - 1;
+    await Task.Delay(dots * 1000);
+
+    Console.WriteLine(" [x] Done");
+
+    // Aqui o cannal pode ser acessado como ((AsyncEventingBasicConsumer)sender).Channel
+    await channel.BasicAckAsync
+    (
+        deliveryTag: ea.DeliveryTag,
+        multiple: false
+    );
+};
+
+await channel.BasicConsumeAsync
+(
+    "task_queue",
+    autoAck: true,
+    consumer: consumer
+);
+
+Console.WriteLine(" Press [enter] to exit.");
+Console.ReadLine();
+```
+
+Agora execute a tarefa *publisher (NewTask)*. Esse é o código final:
+
+```
+// NewTask
+
+using RabbitMQ.Client;
+using System.Text;
+
+var factory = new ConnectionFactory { HostName = "localhost" };
+using var connection = await factory.CreateConnectionAsync();
+using var channel = await connection.CreateChannelAsync();
+
+await channel.QueueDeclareAsync
+(
+    queue: "task_queue",
+    durable: true,
+    exclusive: false,
+    autoDelete: false,
+    arguments: null
+);
+
+var message = GetMessage(args);
+var body = Encoding.UTF8.GetBytes(message);
+
+var properties = new BasicProperties
+{
+    Persistent = true
+};
+
+await channel.BasicPublishAsync
+(
+    exchange: string.Empty,
+    routingKey: "task_queue",
+    body: body
+);
+
+Console.WriteLine($" [X] Sent {message}");
+
+static string GetMessage(string[] args)
+{
+    return ((args.Length > 0) ? string.Join(" ", args) : "Hello World");
+}
+```
+
+Usando confirmações de mensagens e `BasicQosAsync` você pode configurar uma fila de trabalho. As opções de durabilidade permitem que as tarefas sobrevivem mesmo que se o RabbiMQ for reiniciado.
