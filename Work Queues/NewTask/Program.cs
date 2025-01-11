@@ -8,8 +8,8 @@ using var channel = await connection.CreateChannelAsync();
 
 await channel.QueueDeclareAsync
 (
-    queue: "hello",
-    durable: false,
+    queue: "task_queue",
+    durable: true,
     exclusive: false,
     autoDelete: false,
     arguments: null
@@ -18,10 +18,15 @@ await channel.QueueDeclareAsync
 var message = GetMessage(args);
 var body = Encoding.UTF8.GetBytes(message);
 
+var properties = new BasicProperties
+{
+    Persistent = true
+};
+
 await channel.BasicPublishAsync
 (
     exchange: string.Empty,
-    routingKey: "hello",
+    routingKey: "task_queue",
     body: body
 );
 

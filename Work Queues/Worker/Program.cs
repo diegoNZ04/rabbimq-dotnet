@@ -8,12 +8,21 @@ using var channel = await connection.CreateChannelAsync();
 
 await channel.QueueDeclareAsync
 (
-    queue: "hello",
-    durable: false,
+    queue: "task_queue",
+    durable: true,
     exclusive: false,
     autoDelete: false,
     arguments: null
 );
+
+await channel.BasicQosAsync
+(
+    prefetchSize: 0,
+    prefetchCount: 1,
+    global: false
+);
+
+Console.WriteLine(" [*] Waiting for messages.");
 
 var consumer = new AsyncEventingBasicConsumer(channel);
 consumer.ReceivedAsync += async (model, ea) =>
@@ -26,11 +35,18 @@ consumer.ReceivedAsync += async (model, ea) =>
     await Task.Delay(dots * 1000);
 
     Console.WriteLine(" [x] Done");
+
+    // Aqui o cannal pode ser acessado como ((AsyncEventingBasicConsumer)sender).Channel
+    await channel.BasicAckAsync
+    (
+        deliveryTag: ea.DeliveryTag,
+        multiple: false
+    );
 };
 
 await channel.BasicConsumeAsync
 (
-    "hello",
+    "task_queue",
     autoAck: true,
     consumer: consumer
 );
