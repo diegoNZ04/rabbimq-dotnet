@@ -189,3 +189,105 @@ dotnet run
 ```
 
 O consumidor imprimirá a mensagem recebida do editor via RabbitMQ. O *Consumer* continuará rodando, aguardando mensagens, então tente reiniciar o publicador diversas vezes.
+
+## Trabalhando Com Filas
+
+Neste tutorial criamos uma fila (queue) de trabalho que será usada para distribuir tarefas demoradas entre vários trabalhadores.
+
+A ideia principal das **Work Queues** (filas de trabalho, aka: *Task Queues*) é evitar executar imediatamente uma tarefa que consome muitos recursos e ter que esperar que ela seja concluída. 
+
+Em vez disso, agendamos a tarefa para ser realizada mais tarde. Encapsulamos uma tarefa como uma mensagem e a enviamos para uma fila. 
+
+Um processo de trabalho em execução em segundo plano irá exibir as tarefas e, eventualmente, executar o trabalho.
+
+Quando você executa muitos trabalhadores, as tarefas serão compartilhadas entre eles.
+
+Este conceito é especialmente útil em aplicações web onde é impossível lidar com uma tarefa complexa durante uma curta janela de solicitação HTTP.
+### Setup
+
+Vamos criar dois projetos e adicionar o pacote `RabbitMQ.Client` em ambos:
+
+```
+dotnet new console -o NewTask --name NewTask
+dotnet new console -o Worker --name Worker
+cd NewTask  
+dotnet add package RabbitMQ.Client  
+cd ../Worker  
+dotnet add package RabbitMQ.Client
+```
+
+Copie o código do arquivo `Program.cs` de *Send* (tutorial anterior) e para *NewTask* e faça as modificações a seguir.
+
+Atualiza a inicialização da variável `message`:
+
+```
+// NewTask
+
+var message = GetMessage(args);
+```
+
+Adicione o método `GetMessage` no final do arquivo `Program.cs` de *NewTask*:
+
+```
+// NewTask
+
+static string GetMessage(string[] args)
+{
+    return ((args.Length > 0) ? string.Join(" ", args) : "Hello World!");
+}
+```
+
+Agora copio o antigo script de *Receive* do tutorial anterior e cole no script de *Worker*, este script também vai receber algumas modificações. Ele irá manipular as mensagens entregues pelo RabbitMQ e executar a tarefa.
+
+Primeiro, modifique o manipulador de eventos lambda para ser assíncrono e, depois de nosso `WriteLine` existente para receber a mensagem, adicione a tarefa falsa para simular o tempo de execução: 
+
+```
+var consumer = new AsyncEventingBasicConsumer(channel);
+consumer.Received += async (model, ea) =>
+{
+  Console.WriteLine($" [x] Received {message}");
+
+  int dots = message.Split('.').Length - 1;
+  await Task.Delay(dots * 1000);
+
+  Console.WriteLine(" [x] Done");
+}
+```
+### Round-robin Dispatching (Despacho Round-Robin)
+
+Uma das vantagens de usar *Task Queue* é a capacidade de paralelizar facilmente o trabalho. Se estivermos acumulando um amontoado de trabalho, podemos simplesmente adicionar mais trabalhadores e, dessa forma, escalar facilmente. 
+
+Primeiros, vamos executar duas instâncias de *Worker* ao mesmo tempo. Ambos receberão mensagens da fila. 
+
+Você precisa de três terminais abertos. Dois executarão *Worker*. Esses terminais serão nossos dois consumidores: C1 e C2.
+
+```
+# shell 1
+cd Worker
+dotnet run
+# => Press [enter] to exit.
+```
+
+```
+# shell 2
+cd Worker
+dotnet run
+# => Press [enter] to exit.
+```
+
+Na terceira publicaremos novas tarefas. Depois de iniciar os consumidores, você pode publicar as mensagens: 
+
+```
+# shell 3
+cd NewTask
+dotnet run "First message."
+dotnet run "Second message.."
+dotnet run "Third message..."
+dotnet run "Fourth message...."
+dotnet run "Fifth message....."
+```
+
+Resultado dos terminais:
+
+![result-round-dispatching](https://github.com/user-attachments/assets/7352b5af-ae3a-472a-b9bf-80cf5c352280)
+
