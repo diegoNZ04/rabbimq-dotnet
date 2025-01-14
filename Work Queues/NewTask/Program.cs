@@ -6,6 +6,7 @@ var factory = new ConnectionFactory { HostName = "localhost" };
 using var connection = await factory.CreateConnectionAsync();
 using var channel = await connection.CreateChannelAsync();
 
+// Declarando fila como duravel
 await channel.QueueDeclareAsync
 (
     queue: "task_queue",
@@ -15,9 +16,11 @@ await channel.QueueDeclareAsync
     arguments: null
 );
 
+// Var recebe mensagem da CLI
 var message = GetMessage(args);
 var body = Encoding.UTF8.GetBytes(message);
 
+// Definir persistencia como true
 var properties = new BasicProperties
 {
     Persistent = true
@@ -33,6 +36,7 @@ await channel.BasicPublishAsync
 
 Console.WriteLine($" [X] Sent {message}");
 
+// Ler mensagem na CLI
 static string GetMessage(string[] args)
 {
     return ((args.Length > 0) ? string.Join(" ", args) : "Hello World");
