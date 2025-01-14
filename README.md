@@ -12,3 +12,5 @@ Este repositório tem como intuito guardar todo o estudo voltado ao RabbitMQ. El
 [Hello World usando .NET](https://github.com/user-attachments/files/18409271/Hello.World.usando.NET.pdf)
 
 [Trabalhando Com Filas](https://github.com/user-attachments/files/18409289/Trabalhando.Com.Filas.pdf)
+
+[Publish-Subscribe](https://github.com/user-attachments/files/18414137/Publish-Subscribe.pdf)
