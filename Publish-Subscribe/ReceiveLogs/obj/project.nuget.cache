@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "UO0fy5+p9DQ=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Samsung\\OneDrive\\Área de Trabalho\\Projetos\\rabbimq\\Publish-Subscribe\\ReceiveLogs\\ReceiveLogs.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Samsung\\.nuget\\packages\\rabbitmq.client\\7.0.0\\rabbitmq.client.7.0.0.nupkg.sha512",
+    "C:\\Users\\Samsung\\.nuget\\packages\\system.io.pipelines\\8.0.0\\system.io.pipelines.8.0.0.nupkg.sha512",
+    "C:\\Users\\Samsung\\.nuget\\packages\\system.threading.ratelimiting\\8.0.0\\system.threading.ratelimiting.8.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}
